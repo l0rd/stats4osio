@@ -26,5 +26,5 @@ RUN mvn -f /usr/src/osio-issues-monitor/pom.xml clean compile assembly:single
 
 FROM openjdk:8-jre
 WORKDIR /root/
-COPY --from=BUILD_IMAGE /usr/src/osio-issues-monitor/target/openshiftio-issues-monitor-1.0.0-SNAPSHOT.jar .
-ENTRYPOINT ["java","-jar","openshiftio-issues-monitor-1.0.0-SNAPSHOT.jar"]
+COPY --from=BUILD_IMAGE /usr/src/osio-issues-monitor/target/stats4osio-1.0.0-SNAPSHOT.jar .
+ENTRYPOINT ["java","-jar","stats4osio-1.0.0-SNAPSHOT.jar"]
