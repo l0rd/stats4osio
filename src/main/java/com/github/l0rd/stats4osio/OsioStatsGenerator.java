@@ -23,66 +23,60 @@
 
 package com.github.l0rd.stats4osio;
 
+import com.mitchellbosecke.pebble.PebbleEngine;
+import com.mitchellbosecke.pebble.error.PebbleException;
+import com.mitchellbosecke.pebble.template.PebbleTemplate;
 import java.io.IOException;
-import java.net.URISyntaxException;
+import java.io.StringWriter;
+import java.io.Writer;
+import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
-import org.apache.http.client.utils.URIBuilder;
-import org.eclipse.egit.github.core.Issue;
+import java.util.Map;
+import java.util.stream.Collectors;
 import org.eclipse.egit.github.core.Label;
-import org.eclipse.egit.github.core.client.GitHubClient;
-import org.eclipse.egit.github.core.service.IssueService;
-import org.eclipse.egit.github.core.service.LabelService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 class OsioStatsGenerator {
 
-  private static final String SEV1_URGENT = "SEV1-urgent";
-  private static final String SEV2_HIGH = "SEV2-high";
-
-  public static void main(String[] args) throws IOException {
-
-    final Logger logger = LoggerFactory.getLogger(OsioStatsGenerator.class);
+  public static void main(String[] args) throws IOException, PebbleException {
 
     String gitHubOrg = "openshiftio";
     String gitHubRepo = "openshift.io";
 
-    IssueService issueService = new IssueService();
-    LabelService labelService = new LabelService();
-    GitHubClient client = new GitHubClient();
-    if (args.length == 1) {
-      String token = args[0];
-      client.setOAuth2Token(token);
-      issueService.getClient().setOAuth2Token(token);
-      labelService.getClient().setOAuth2Token(token);
-    } else if (args.length == 2) {
-      String user = args[0];
-      String password = args[1];
-      client.setCredentials(user, password);
-      issueService.getClient().setCredentials(user, password);
-      labelService.getClient().setCredentials(user, password);
-    } else {
-      logger.warn(
-          "We are going to use GitHub API without authentication and the rate limite is very low. "
-              + "Authenticated request instead get a much higher limit (c.f. https://developer.github.com/v3/#rate-limiting). "
-              + "To use authenticated requests provide a GitHub access token as a parameter when running OsioStatsGenerator. "
-              + "For how to get a GitHub access token see https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/");
-    }
+    Stats4OsioGitHubClient client = new Stats4OsioGitHubClient(args);
+    List<Label> teamsLabels = getTeamsLabels(gitHubOrg, gitHubRepo, client);
+//    printTeamCSVStats(gitHubOrg, gitHubRepo, client, teamsLabels);
 
-    List<Label> labels = labelService.getLabels(gitHubOrg, gitHubRepo);
+    printTeamHTMLStats(gitHubOrg, gitHubRepo, client, teamsLabels.stream().map(label -> label.getName()).collect(
+        Collectors.toList()));
+  }
+
+  private static List<Label> getTeamsLabels(String gitHubOrg, String gitHubRepo,
+      Stats4OsioGitHubClient client) throws IOException {
+    List<Label> labels = client.getLabelService().getLabels(gitHubOrg, gitHubRepo);
     labels.removeIf(l -> !l.getName().startsWith("team/"));
+    return labels;
+  }
 
+  private static void printTeamCSVStats(String gitHubOrg, String gitHubRepo,
+      Stats4OsioGitHubClient client, List<Label> teamLabels) throws IOException {
     printCSVHeader();
 
-    for (Label teamLabel : labels) {
-      String team = teamLabel.getName();
-      List<Issue> sev1 = getSev1(gitHubOrg, gitHubRepo, issueService, team);
-      String sev1URL = getFilteredIssuesURL(gitHubOrg, gitHubRepo, team, SEV1_URGENT);
-      List<Issue> sev2 = getSev2(gitHubOrg, gitHubRepo, issueService, team);
-      String sev2URL = getFilteredIssuesURL(gitHubOrg, gitHubRepo, team, SEV2_HIGH);
+    for (Label teamLabel : teamLabels) {
+      OsioTeamStats teamStats = new OsioTeamStats(gitHubOrg,
+                                                  gitHubRepo,
+                                                  client,
+                                                  teamLabel.getName());
+
+      String team = teamStats.getTeamName();
+      int sev1Number = teamStats.getSev1IssuesNumber();
+      String sev1URL = teamStats.getSev1IssuesURL();
+      int sev2Number = teamStats.getSev2IssuesNumber();
+      String sev2URL = teamStats.getSev2IssuesURL();
+
       System.out.println(
-          team + " ," + sev1.size() + " ," + sev1URL + " ," + sev2.size() + " ," + sev2URL);
+          team + " ," + sev1Number + " ," + sev1URL + " ," + sev2Number + " ," + sev2URL);
     }
   }
 
@@ -90,30 +84,30 @@ class OsioStatsGenerator {
     System.out.println("team, SEV1-COUNT, SEV1-URL, SEV2-COUNT, SEV2-URL");
   }
 
-  private static List<Issue> getSev1(String gitHubOrg, String gitHubRepo,
-      IssueService issueService, String team) throws IOException {
-    HashMap<String, String> blockerFilter = new HashMap<String, String>() {{
-      put(IssueService.FILTER_LABELS, SEV1_URGENT + "," + team);
-    }};
-    return issueService.getIssues(gitHubOrg, gitHubRepo, blockerFilter);
-  }
+  public static void printTeamHTMLStats(String gitHubOrg, String gitHubRepo,
+      Stats4OsioGitHubClient client, List<String> teamLabels) throws PebbleException, IOException {
 
-  private static String getFilteredIssuesURL(String gitHubOrg, String gitHubRepo, String team,
-      String sev) {
-    try {
-      return new URIBuilder("https://github.com/" + gitHubOrg + "/" + gitHubRepo + "/issues")
-          .addParameter("q", "is:open is:issue label:" + team + " label:" + sev).build().toString();
-    } catch (URISyntaxException e) {
-      e.printStackTrace();
+    PebbleEngine engine = new PebbleEngine.Builder().build();
+    PebbleTemplate compiledTemplate = engine.getTemplate("templates/issues_table.html");
+
+    Writer writer = new StringWriter();
+    Map<String, Object> context = new HashMap<>();
+    context.put("websiteTitle", "OpenShift.io GitHub stats");
+
+    List<OsioTeamStats> osioTeamsStats = new ArrayList<>();
+    for (String teamLabel : teamLabels) {
+      OsioTeamStats teamStats = new OsioTeamStats(gitHubOrg,
+          gitHubRepo,
+          client,
+          teamLabel);
+      osioTeamsStats.add(teamStats);
     }
-    return "";
-  }
 
-  private static List<Issue> getSev2(String gitHubOrg, String gitHubRepo,
-      IssueService issueService, String team) throws IOException {
-    HashMap<String, String> blockerFilter = new HashMap<String, String>() {{
-      put(IssueService.FILTER_LABELS, SEV2_HIGH + "," + team);
-    }};
-    return issueService.getIssues(gitHubOrg, gitHubRepo, blockerFilter);
+    context.put("osioTeams", osioTeamsStats);
+    context.put("now", Calendar.getInstance().getTime());
+
+    compiledTemplate.evaluate(writer, context);
+    String output = writer.toString();
+    System.out.println(output);
   }
 }
