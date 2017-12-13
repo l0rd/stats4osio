@@ -1,0 +1,23 @@
+{% extends "templates/stats4osio.html" %}
+
+{% block content %}
+<table>
+  <caption>STATS 4 OSIO</caption>
+  <thead>
+  <tr>
+    <th scope="col">Team Name</th>
+    <th scope="col">Number of SEV1</th>
+    <th scope="col">Number of SEV2</th>
+  </tr>
+  </thead>
+  <tbody>
+  {% for osioTeam in osioTeams %}
+  <tr>
+    <td data-label="Team Name">{{ osioTeam.teamName }}</td>
+    <td data-label="Number of SEV1"><a href="{{osioTeam.sev1IssuesURL}}" >{{ osioTeam.sev1IssuesNumber }}</a></td>
+    <td data-label="Number of SEV2"><a href="{{osioTeam.sev2IssuesURL}}" >{{ osioTeam.sev2IssuesNumber }}</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
